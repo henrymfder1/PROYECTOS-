@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #f7f7f7;
+      }
+
+      h1, h2 {
+        margin: 0 0 16px 0;
+      }
+
+      .card {
+        background: #fff;
+        padding: 16px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+        margin-bottom: 16px;
+      }
+
+      label {
+        display: block;
+        margin-top: 8px;
+        font-weight: 600;
+      }
+
+      input, select, textarea {
+        width: 100%;
+        padding: 8px;
+        margin-top: 4px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+        box-sizing: border-box;
+      }
+
+      button {
+        margin-top: 12px;
+        padding: 10px 16px;
+        border: none;
+        border-radius: 4px;
+        background: #1a73e8;
+        color: white;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #5f6368;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      .row {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .row > div {
+        flex: 1;
+        min-width: 260px;
+      }
+
+      .message {
+        padding: 10px;
+        border-radius: 6px;
+        margin-top: 8px;
+      }
+
+      .message.error {
+        background: #fce8e6;
+        color: #d93025;
+      }
+
+      .message.success {
+        background: #e6f4ea;
+        color: #188038;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th, td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+      }
+
+      th {
+        background: #f1f3f4;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Bitácora de Procesos (Google Apps Script)</h1>
+
+    <div id="setup-card" class="card hidden">
+      <h2>Configuración inicial</h2>
+      <p>Crea el usuario administrador para comenzar.</p>
+      <label>Usuario administrador</label>
+      <input id="setup-username" />
+      <label>Contraseña</label>
+      <input id="setup-password" type="password" />
+      <button onclick="createAdmin()">Crear administrador</button>
+      <div id="setup-message" class="message hidden"></div>
+    </div>
+
+    <div id="login-card" class="card hidden">
+      <h2>Iniciar sesión</h2>
+      <label>Usuario</label>
+      <input id="login-username" />
+      <label>Contraseña</label>
+      <input id="login-password" type="password" />
+      <button onclick="login()">Entrar</button>
+      <div id="login-message" class="message hidden"></div>
+    </div>
+
+    <div id="app" class="hidden">
+      <div class="card">
+        <h2>Registrar proceso</h2>
+        <div id="process-fields"></div>
+        <button onclick="saveProcess()">Guardar proceso</button>
+        <div id="process-message" class="message hidden"></div>
+      </div>
+
+      <div class="card">
+        <h2>Procesos registrados</h2>
+        <button class="secondary" onclick="refreshProcesses()">Actualizar</button>
+        <table>
+          <thead id="process-table-head"></thead>
+          <tbody id="process-table-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Agregar entrada a bitácora</h2>
+        <label>ID de proceso</label>
+        <input id="log-process-id" />
+        <label>Fecha (AAAA-MM-DD)</label>
+        <input id="log-date" />
+        <label>Nota</label>
+        <textarea id="log-note"></textarea>
+        <button onclick="saveLogEntry()">Guardar entrada</button>
+        <div id="log-message" class="message hidden"></div>
+      </div>
+
+      <div class="card">
+        <h2>Bitácora por proceso</h2>
+        <label>ID de proceso</label>
+        <input id="log-view-process-id" />
+        <button class="secondary" onclick="loadLogs()">Ver bitácora</button>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Fecha</th>
+              <th>Nota</th>
+            </tr>
+          </thead>
+          <tbody id="log-table-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Configurar campos</h2>
+        <p>Edita los campos (nombre, tipo, requerido).</p>
+        <div id="config-fields"></div>
+        <button onclick="addConfigField()">Agregar campo</button>
+        <button onclick="saveConfig()">Guardar configuración</button>
+        <div id="config-message" class="message hidden"></div>
+      </div>
+    </div>
+
+    <script>
+      let configFields = [];
+
+      function showMessage(id, text, type) {
+        const element = document.getElementById(id);
+        element.textContent = text;
+        element.className = `message ${type}`;
+        element.classList.remove('hidden');
+      }
+
+      function clearMessage(id) {
+        const element = document.getElementById(id);
+        element.classList.add('hidden');
+      }
+
+      function init() {
+        google.script.run.withSuccessHandler((needsSetup) => {
+          if (needsSetup) {
+            document.getElementById('setup-card').classList.remove('hidden');
+          } else {
+            document.getElementById('login-card').classList.remove('hidden');
+          }
+        }).isSetupNeeded();
+      }
+
+      function createAdmin() {
+        clearMessage('setup-message');
+        const username = document.getElementById('setup-username').value.trim();
+        const password = document.getElementById('setup-password').value;
+        if (!username || !password) {
+          showMessage('setup-message', 'Completa usuario y contraseña.', 'error');
+          return;
+        }
+        google.script.run.withSuccessHandler(() => {
+          showMessage('setup-message', 'Administrador creado. Ahora inicia sesión.', 'success');
+          document.getElementById('setup-card').classList.add('hidden');
+          document.getElementById('login-card').classList.remove('hidden');
+        }).withFailureHandler((error) => {
+          showMessage('setup-message', error.message || 'Error creando administrador.', 'error');
+        }).createAdminUser(username, password);
+      }
+
+      function login() {
+        clearMessage('login-message');
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+        google.script.run.withSuccessHandler((result) => {
+          if (!result.ok) {
+            showMessage('login-message', result.message, 'error');
+            return;
+          }
+          document.getElementById('login-card').classList.add('hidden');
+          document.getElementById('app').classList.remove('hidden');
+          loadConfig();
+          refreshProcesses();
+        }).authenticate(username, password);
+      }
+
+      function loadConfig() {
+        google.script.run.withSuccessHandler((fields) => {
+          configFields = fields;
+          renderProcessFields();
+          renderConfigFields();
+        }).getConfig();
+      }
+
+      function renderProcessFields() {
+        const container = document.getElementById('process-fields');
+        container.innerHTML = '';
+        configFields.forEach((field) => {
+          const wrapper = document.createElement('div');
+          const label = document.createElement('label');
+          label.textContent = `${field.name}${field.required ? ' *' : ''}`;
+          const input = document.createElement('input');
+          input.dataset.fieldName = field.name;
+          input.dataset.fieldType = field.type;
+          wrapper.appendChild(label);
+          wrapper.appendChild(input);
+          container.appendChild(wrapper);
+        });
+      }
+
+      function renderConfigFields() {
+        const container = document.getElementById('config-fields');
+        container.innerHTML = '';
+        configFields.forEach((field, index) => {
+          const row = document.createElement('div');
+          row.className = 'row';
+
+          const nameDiv = document.createElement('div');
+          const nameLabel = document.createElement('label');
+          nameLabel.textContent = 'Nombre';
+          const nameInput = document.createElement('input');
+          nameInput.value = field.name;
+          nameInput.oninput = (event) => configFields[index].name = event.target.value;
+          nameDiv.appendChild(nameLabel);
+          nameDiv.appendChild(nameInput);
+
+          const typeDiv = document.createElement('div');
+          const typeLabel = document.createElement('label');
+          typeLabel.textContent = 'Tipo';
+          const typeSelect = document.createElement('select');
+          ['text', 'number', 'date'].forEach((type) => {
+            const option = document.createElement('option');
+            option.value = type;
+            option.textContent = type;
+            if (type === field.type) option.selected = true;
+            typeSelect.appendChild(option);
+          });
+          typeSelect.onchange = (event) => configFields[index].type = event.target.value;
+          typeDiv.appendChild(typeLabel);
+          typeDiv.appendChild(typeSelect);
+
+          const reqDiv = document.createElement('div');
+          const reqLabel = document.createElement('label');
+          reqLabel.textContent = 'Requerido';
+          const reqSelect = document.createElement('select');
+          ['true', 'false'].forEach((value) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = value;
+            if (String(field.required) === value) option.selected = true;
+            reqSelect.appendChild(option);
+          });
+          reqSelect.onchange = (event) => configFields[index].required = event.target.value === 'true';
+          reqDiv.appendChild(reqLabel);
+          reqDiv.appendChild(reqSelect);
+
+          row.appendChild(nameDiv);
+          row.appendChild(typeDiv);
+          row.appendChild(reqDiv);
+          container.appendChild(row);
+        });
+      }
+
+      function addConfigField() {
+        configFields.push({ name: 'Nuevo campo', type: 'text', required: false });
+        renderConfigFields();
+      }
+
+      function saveConfig() {
+        clearMessage('config-message');
+        google.script.run.withSuccessHandler(() => {
+          showMessage('config-message', 'Configuración guardada.', 'success');
+          renderProcessFields();
+        }).withFailureHandler((error) => {
+          showMessage('config-message', error.message || 'Error guardando configuración.', 'error');
+        }).saveConfig(configFields);
+      }
+
+      function saveProcess() {
+        clearMessage('process-message');
+        const inputs = document.querySelectorAll('#process-fields input');
+        const data = {};
+        for (const input of inputs) {
+          const value = input.value.trim();
+          const field = configFields.find((f) => f.name === input.dataset.fieldName);
+          if (field.required && !value) {
+            showMessage('process-message', `Completa el campo ${field.name}.`, 'error');
+            return;
+          }
+          if (field.type === 'number' && value && isNaN(Number(value))) {
+            showMessage('process-message', `El campo ${field.name} debe ser numérico.`, 'error');
+            return;
+          }
+          if (field.type === 'date' && value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+            showMessage('process-message', `El campo ${field.name} debe ser AAAA-MM-DD.`, 'error');
+            return;
+          }
+          data[field.name] = value;
+        }
+        google.script.run.withSuccessHandler(() => {
+          showMessage('process-message', 'Proceso guardado.', 'success');
+          inputs.forEach((input) => input.value = '');
+          refreshProcesses();
+        }).createProcess(data);
+      }
+
+      function refreshProcesses() {
+        google.script.run.withSuccessHandler((processes) => {
+          const head = document.getElementById('process-table-head');
+          const body = document.getElementById('process-table-body');
+          head.innerHTML = '';
+          body.innerHTML = '';
+
+          const headerRow = document.createElement('tr');
+          ['ID', 'Creado', ...configFields.map((f) => f.name)].forEach((title) => {
+            const th = document.createElement('th');
+            th.textContent = title;
+            headerRow.appendChild(th);
+          });
+          head.appendChild(headerRow);
+
+          processes.forEach((process) => {
+            const row = document.createElement('tr');
+            const idCell = document.createElement('td');
+            idCell.textContent = process.id;
+            row.appendChild(idCell);
+
+            const createdCell = document.createElement('td');
+            createdCell.textContent = process.createdAt;
+            row.appendChild(createdCell);
+
+            configFields.forEach((field) => {
+              const cell = document.createElement('td');
+              cell.textContent = process.data[field.name] || '';
+              row.appendChild(cell);
+            });
+            body.appendChild(row);
+          });
+        }).listProcesses();
+      }
+
+      function saveLogEntry() {
+        clearMessage('log-message');
+        const processId = document.getElementById('log-process-id').value.trim();
+        const date = document.getElementById('log-date').value.trim();
+        const note = document.getElementById('log-note').value.trim();
+        if (!processId || !note) {
+          showMessage('log-message', 'Ingresa el ID del proceso y una nota.', 'error');
+          return;
+        }
+        google.script.run.withSuccessHandler(() => {
+          showMessage('log-message', 'Entrada guardada.', 'success');
+          document.getElementById('log-note').value = '';
+        }).addLogEntry(processId, date, note);
+      }
+
+      function loadLogs() {
+        const processId = document.getElementById('log-view-process-id').value.trim();
+        const body = document.getElementById('log-table-body');
+        body.innerHTML = '';
+        if (!processId) {
+          return;
+        }
+        google.script.run.withSuccessHandler((logs) => {
+          logs.forEach((log) => {
+            const row = document.createElement('tr');
+            const idCell = document.createElement('td');
+            idCell.textContent = log.id;
+            const dateCell = document.createElement('td');
+            dateCell.textContent = log.date;
+            const noteCell = document.createElement('td');
+            noteCell.textContent = log.note;
+            row.appendChild(idCell);
+            row.appendChild(dateCell);
+            row.appendChild(noteCell);
+            body.appendChild(row);
+          });
+        }).listLogEntries(processId);
+      }
+
+      window.onload = init;
+    </script>
+  </body>
+</html>
