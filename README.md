@@ -1,38 +1,100 @@
-# Bitácora de Procesos - Google Apps Script
+# Bitácora de Procesos - Firma de Abogados (CLI Python)
 
-Este repositorio contiene una versión web de la bitácora diseñada para **Google Apps Script**, usando Google Sheets como base de datos y una interfaz HTML simple.
+Este proyecto incluye un programa en Python para registrar procesos legales, llevar una bitácora de actualizaciones, controlar gastos por proceso y proteger el acceso con usuarios y contraseñas.
 
-## Qué archivos necesitas en Apps Script
+## Requisitos
 
-Dentro del editor de Apps Script crea estos archivos y pega el contenido del repo:
+- Python 3.9+
 
-- `Code.gs`
-- `index.html`
+## Uso
 
-## Pasos para publicarlo en Google Apps Script
+1. Ejecuta el programa:
 
-1. Abre Google Drive y crea una hoja de cálculo nueva (será la base de datos).
-2. Ve a **Extensiones → Apps Script**.
-3. Elimina el archivo `Código.gs` que aparece por defecto.
-4. Crea un archivo nuevo llamado **`Code.gs`** y pega el contenido del repo.
-5. Crea un archivo HTML llamado **`index.html`** y pega el contenido del repo.
-6. Guarda el proyecto.
-7. En Apps Script, selecciona **Implementar → Nueva implementación → Aplicación web**.
-8. En **Ejecutar como**, selecciona tu usuario.
-9. En **Quién tiene acceso**, selecciona “Cualquiera con el enlace” o “Solo yo”.
-10. Haz clic en **Implementar** y abre la URL que te da Apps Script.
+```bash
+python app.py
+```
 
-## Qué hace esta versión
+2. También puedes ejecutar con doble clic:
+   - Windows: `run.bat`
+   - macOS: `run.command`
+   - macOS/Linux: `run.sh`
 
-- Registra procesos con campos configurables.
-- Guarda la bitácora de cada proceso.
-- Permite editar la lista de campos (tipo y requerido).
-- Gestiona acceso con usuario administrador y login.
+3. Selecciona una opción del menú:
+   - Registrar un nuevo proceso.
+   - Listar procesos (vista general o por filtros).
+   - Agregar entradas de bitácora.
+   - Gestionar campos (agregar, editar, borrar y reordenar).
+   - Registrar y revisar gastos por proceso.
+   - Exportar a CSV o PDF.
+   - Gestión de usuarios y contraseñas.
 
-## Copia del proyecto anterior (Python)
+## Ajustes de campos y validaciones
 
-El archivo anterior basado en Python y SQLite se conserva como referencia en:
+Desde el menú **Ajustes de campos** puedes:
 
-- `app_legacy.py`
+- Agregar campos sin borrar los existentes.
+- Editar un campo específico (nombre, tipo, requerido).
+- Eliminar campos si ya no se necesitan.
+- Reordenar campos para cambiar el orden de captura y listado.
 
-Los scripts `run.bat`, `run.command` y `run.sh` son parte de esa versión anterior.
+Tipos de campo soportados:
+- `text`
+- `number`
+- `date` (formato `AAAA-MM-DD`)
+
+## Gastos por proceso
+
+Cada proceso puede tener gastos (transporte u otros). El sistema:
+
+- Permite que todos los usuarios registren gastos.
+- Permite que solo el administrador edite montos o descripciones.
+- Muestra el total de gastos por proceso en el listado.
+
+## Listas y filtros
+
+En el listado puedes ver:
+
+- Vista general (todos los procesos).
+- Filtro por ubicación de juzgado (si existe un campo con “juzgado”).
+- Filtro por tipo de proceso (si existe un campo con “tipo”).
+- Filtro por cualquier campo configurable.
+
+## Exportar bitácora a Excel (CSV) o PDF
+
+Desde el menú **Exportar bitácora**, el sistema crea:
+
+- Archivos `.csv` (compatibles con Excel) para procesos, bitácora y gastos.
+- Un archivo `.pdf` con el listado de procesos y total de gastos.
+
+Los archivos se guardan en la carpeta `exports/`.
+
+> Para PDF necesitas instalar `reportlab`:
+
+```bash
+pip install reportlab
+```
+
+## Usuarios y contraseñas
+
+La primera vez que se ejecuta la aplicación, te pedirá crear un usuario administrador. Luego podrás:
+
+- Crear usuarios.
+- Listar usuarios.
+- Resetear contraseñas.
+
+Solo los administradores pueden gestionar usuarios.
+
+## Crear un archivo `.exe`
+
+Si deseas un ejecutable para Windows, puedes usar `pyinstaller`:
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile app.py
+```
+
+El ejecutable quedará en la carpeta `dist/`.
+
+## Datos almacenados
+
+La información se guarda en una base de datos SQLite local llamada `bitacora.db` en el mismo directorio.
