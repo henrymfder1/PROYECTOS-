@@ -1,0 +1,5 @@
+@echo off
+setlocal
+python app.py
+endlocal
+pause
