@@ -1,6 +1,7 @@
 import csv
 import json
 import sqlite3
+import shutil
 from datetime import datetime
 from getpass import getpass
 from hashlib import sha256
@@ -9,6 +10,7 @@ from pathlib import Path
 DB_PATH = Path(__file__).with_name("bitacora.db")
 CONFIG_PATH = Path(__file__).with_name("config.json")
 EXPORTS_DIR = Path(__file__).with_name("exports")
+BACKUPS_DIR = Path(__file__).with_name("backups")
 
 DEFAULT_FIELDS = [
     {"name": "Número de expediente", "type": "text", "required": True},
@@ -41,7 +43,7 @@ def normalize_config(config):
     if fields and isinstance(fields[0], str):
         for field in fields:
             normalized_fields.append(
-                {"name": field, "type": "text", "required": True}
+                {"name": field, "type": "text", "required": True, "options": []}
             )
     else:
         for field in fields:
@@ -50,6 +52,7 @@ def normalize_config(config):
                     "name": field.get("name", "Campo"),
                     "type": field.get("type", "text"),
                     "required": bool(field.get("required", True)),
+                    "options": field.get("options", []) or [],
                 }
             )
     return {"fields": normalized_fields}
@@ -82,6 +85,35 @@ def init_db():
                 created_by TEXT NOT NULL,
                 updated_at TEXT,
                 updated_by TEXT,
+                FOREIGN KEY (process_id) REFERENCES processes(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS status_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_id INTEGER NOT NULL,
+                old_status TEXT,
+                new_status TEXT NOT NULL,
+                changed_at TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                FOREIGN KEY (process_id) REFERENCES processes(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deadlines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                process_id INTEGER NOT NULL,
+                due_date TEXT NOT NULL,
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                completed_at TEXT,
+                completed_by TEXT,
+                is_completed INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (process_id) REFERENCES processes(id)
             )
             """
@@ -184,6 +216,9 @@ def validate_field(field, value):
     if not value:
         return False, "El campo es obligatorio."
     field_type = field.get("type", "text")
+    options = field.get("options") or []
+    if options and value not in options:
+        return False, f"Debe ser una de las opciones: {', '.join(options)}."
     if field_type == "number":
         try:
             float(value)
@@ -203,11 +238,14 @@ def prompt_fields(fields):
         name = field["name"]
         field_type = field.get("type", "text")
         required = field.get("required", True)
+        options = field.get("options") or []
         hint = ""
         if field_type == "date":
             hint = " (AAAA-MM-DD)"
         if field_type == "number":
             hint = " (número)"
+        if options:
+            hint = f" (opciones: {', '.join(options)})"
 
         while True:
             value = prompt(f"{name}{hint}")
@@ -239,6 +277,17 @@ def add_process():
             (json.dumps(data, ensure_ascii=False), created_at),
         )
     print("Proceso registrado.\n")
+
+
+def backup_database(auto=False):
+    if not DB_PATH.exists():
+        return
+    BACKUPS_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = BACKUPS_DIR / f"bitacora_{timestamp}.db"
+    shutil.copy2(DB_PATH, backup_path)
+    label = "Respaldo automático creado" if auto else "Respaldo creado"
+    print(f"{label}: {backup_path}\n")
 
 
 def get_expense_totals():
@@ -374,12 +423,32 @@ def configure_fields():
                 field_type = "text"
             required_raw = prompt("¿Obligatorio? (s/n)") or "s"
             required = required_raw.lower().startswith("s")
+            options = []
+            if field_type == "text":
+                options_raw = prompt("Opciones separadas por coma (enter para libre)")
+                if options_raw:
+                    options = [opt.strip() for opt in options_raw.split(",") if opt.strip()]
             position_raw = prompt("Posición (1 = inicio, enter = final)")
             if position_raw.isdigit():
                 position = max(1, min(int(position_raw), len(fields) + 1)) - 1
-                fields.insert(position, {"name": name, "type": field_type, "required": required})
+                fields.insert(
+                    position,
+                    {
+                        "name": name,
+                        "type": field_type,
+                        "required": required,
+                        "options": options,
+                    },
+                )
             else:
-                fields.append({"name": name, "type": field_type, "required": required})
+                fields.append(
+                    {
+                        "name": name,
+                        "type": field_type,
+                        "required": required,
+                        "options": options,
+                    }
+                )
             save_config({"fields": fields})
             print("Campo agregado.\n")
         elif choice == "2":
@@ -404,7 +473,23 @@ def configure_fields():
                 required = required_raw.lower().startswith("s")
             else:
                 required = field.get("required", True)
-            fields[index] = {"name": name, "type": field_type, "required": required}
+            options = field.get("options", [])
+            if field_type == "text":
+                options_raw = prompt(
+                    f"Opciones separadas por coma (actual: {', '.join(options) or 'libre'})"
+                )
+                if options_raw:
+                    options = [opt.strip() for opt in options_raw.split(",") if opt.strip()]
+                elif options_raw == "":
+                    options = []
+            else:
+                options = []
+            fields[index] = {
+                "name": name,
+                "type": field_type,
+                "required": required,
+                "options": options,
+            }
             save_config({"fields": fields})
             print("Campo actualizado.\n")
         elif choice == "3":
@@ -460,6 +545,192 @@ def filter_processes_by_field(field_name, value):
         if str(data.get(field_name, "")).strip().lower() == value.strip().lower():
             filtered.append((process_id, data_json, created_at))
     return filtered
+
+
+def find_field_by_keyword(fields, keyword):
+    return next((field for field in fields if keyword in field["name"].lower()), None)
+
+
+def update_process_status(user):
+    config = load_config()
+    fields = config.get("fields", DEFAULT_FIELDS)
+    status_field = find_field_by_keyword(fields, "estado")
+    if not status_field:
+        print("No existe un campo de estado en la configuración.\n")
+        return
+    list_processes()
+    process_id = prompt("ID del proceso a actualizar")
+    if not process_id.isdigit():
+        print("ID inválido.\n")
+        return
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT data_json FROM processes WHERE id = ?",
+            (process_id,),
+        ).fetchone()
+        if not row:
+            print("El proceso no existe.\n")
+            return
+        data = json.loads(row[0])
+        old_status = data.get(status_field["name"], "")
+        options = status_field.get("options") or []
+        hint = f" (opciones: {', '.join(options)})" if options else ""
+        new_status = prompt(f"Nuevo estado{hint}")
+        if not new_status:
+            print("El estado es obligatorio.\n")
+            return
+        if options and new_status not in options:
+            print("Estado inválido.\n")
+            return
+        data[status_field["name"]] = new_status
+        conn.execute(
+            "UPDATE processes SET data_json = ? WHERE id = ?",
+            (json.dumps(data, ensure_ascii=False), process_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO status_history (process_id, old_status, new_status, changed_at, changed_by)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                process_id,
+                old_status,
+                new_status,
+                datetime.now().isoformat(timespec="seconds"),
+                user["username"],
+            ),
+        )
+    print("Estado actualizado y registrado en historial.\n")
+
+
+def view_status_history():
+    list_processes()
+    process_id = prompt("ID del proceso")
+    if not process_id.isdigit():
+        print("ID inválido.\n")
+        return
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT old_status, new_status, changed_at, changed_by
+            FROM status_history
+            WHERE process_id = ?
+            ORDER BY changed_at DESC
+            """,
+            (process_id,),
+        ).fetchall()
+    if not rows:
+        print("No hay historial de estados para este proceso.\n")
+        return
+    print("\n--- Historial de estados ---")
+    for old_status, new_status, changed_at, changed_by in rows:
+        print(f"{changed_at} | {old_status or '-'} -> {new_status} | {changed_by}")
+    print()
+
+
+def add_deadline(user):
+    list_processes()
+    process_id = prompt("ID del proceso para el vencimiento")
+    due_date = prompt("Fecha de vencimiento (AAAA-MM-DD)")
+    description = prompt("Descripción del vencimiento")
+    if not process_id.isdigit():
+        print("ID inválido.\n")
+        return
+    try:
+        datetime.strptime(due_date, "%Y-%m-%d")
+    except ValueError:
+        print("Fecha inválida.\n")
+        return
+    if not description:
+        print("La descripción es obligatoria.\n")
+        return
+    created_at = datetime.now().isoformat(timespec="seconds")
+    with get_connection() as conn:
+        process = conn.execute(
+            "SELECT id FROM processes WHERE id = ?", (process_id,)
+        ).fetchone()
+        if not process:
+            print("El proceso no existe.\n")
+            return
+        conn.execute(
+            """
+            INSERT INTO deadlines (process_id, due_date, description, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (process_id, due_date, description, created_at, user["username"]),
+        )
+    print("Vencimiento registrado.\n")
+
+
+def list_deadlines(include_completed=False, days_ahead=None):
+    with get_connection() as conn:
+        query = """
+            SELECT id, process_id, due_date, description, created_at, created_by, is_completed
+            FROM deadlines
+        """
+        params = []
+        if not include_completed:
+            query += " WHERE is_completed = 0"
+        if days_ahead is not None:
+            condition = " AND " if "WHERE" in query else " WHERE "
+            query += f"{condition}date(due_date) <= date('now', ?)"
+            params.append(f"+{days_ahead} days")
+        query += " ORDER BY due_date ASC"
+        rows = conn.execute(query, params).fetchall()
+    if not rows:
+        print("No hay vencimientos pendientes.\n")
+        return []
+    print("\n--- Vencimientos ---")
+    for deadline_id, process_id, due_date, description, created_at, created_by, is_completed in rows:
+        status = "completado" if is_completed else "pendiente"
+        print(
+            f"[{deadline_id}] Proceso {process_id} | {due_date} | {description} "
+            f"| {created_by} | {status}"
+        )
+    print()
+    return rows
+
+
+def complete_deadline(user):
+    rows = list_deadlines(include_completed=False)
+    if not rows:
+        return
+    deadline_id = prompt("ID del vencimiento a marcar como completado")
+    if not deadline_id.isdigit():
+        print("ID inválido.\n")
+        return
+    with get_connection() as conn:
+        updated = conn.execute(
+            """
+            UPDATE deadlines
+            SET is_completed = 1, completed_at = ?, completed_by = ?
+            WHERE id = ?
+            """,
+            (datetime.now().isoformat(timespec="seconds"), user["username"], deadline_id),
+        )
+    if updated.rowcount == 0:
+        print("Vencimiento no encontrado.\n")
+    else:
+        print("Vencimiento marcado como completado.\n")
+
+
+def deadlines_menu(user):
+    print("\n--- Vencimientos y alertas ---")
+    print("1. Registrar vencimiento")
+    print("2. Ver vencimientos próximos (7 días)")
+    print("3. Ver todos los vencimientos pendientes")
+    print("4. Marcar vencimiento como completado")
+    choice = prompt("Selecciona una opción")
+    if choice == "1":
+        add_deadline(user)
+    elif choice == "2":
+        list_deadlines(include_completed=False, days_ahead=7)
+    elif choice == "3":
+        list_deadlines(include_completed=False)
+    elif choice == "4":
+        complete_deadline(user)
+    else:
+        print("Opción inválida.\n")
 
 
 def list_processes_menu():
@@ -715,6 +986,52 @@ def export_to_csv():
     print(f"Exportación CSV de gastos en: {expenses_path}\n")
 
 
+def export_expenses_summary():
+    config = load_config()
+    fields = config.get("fields", DEFAULT_FIELDS)
+    field_names = [field["name"] for field in fields]
+    if not field_names:
+        print("No hay campos configurados para agrupar.\n")
+        return
+    print("\n--- Exportar gastos agrupados ---")
+    for index, name in enumerate(field_names, start=1):
+        print(f"{index}. {name}")
+    index_raw = prompt("Selecciona el campo para agrupar")
+    if not index_raw.isdigit():
+        print("Número inválido.\n")
+        return
+    index = int(index_raw) - 1
+    if index < 0 or index >= len(field_names):
+        print("Número fuera de rango.\n")
+        return
+    field_name = field_names[index]
+    EXPORTS_DIR.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_path = EXPORTS_DIR / f"gastos_por_{field_name}_{timestamp}.csv"
+
+    with get_connection() as conn:
+        processes = conn.execute("SELECT id, data_json FROM processes").fetchall()
+        expenses = conn.execute("SELECT process_id, amount FROM expenses").fetchall()
+
+    process_lookup = {}
+    for process_id, data_json in processes:
+        data = json.loads(data_json)
+        process_lookup[process_id] = data.get(field_name, "Sin dato")
+
+    summary = {}
+    for process_id, amount in expenses:
+        key = process_lookup.get(process_id, "Sin dato")
+        summary[key] = summary.get(key, 0) + amount
+
+    with summary_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow([field_name, "Total gastos"])
+        for key, total in sorted(summary.items()):
+            writer.writerow([key, f"{total:.2f}"])
+
+    print(f"Exportación CSV de gastos agrupados en: {summary_path}\n")
+
+
 def export_to_pdf():
     try:
         from reportlab.lib.pagesizes import letter
@@ -774,11 +1091,14 @@ def export_menu():
     print("\n--- Exportar bitácora ---")
     print("1. Exportar a CSV (Excel)")
     print("2. Exportar a PDF")
+    print("3. Exportar gastos agrupados")
     choice = prompt("Selecciona una opción")
     if choice == "1":
         export_to_csv()
     elif choice == "2":
         export_to_pdf()
+    elif choice == "3":
+        export_expenses_summary()
     else:
         print("Opción inválida.\n")
 
@@ -795,6 +1115,85 @@ def expenses_menu(user):
         view_expenses()
     elif choice == "3":
         edit_expense(user)
+    else:
+        print("Opción inválida.\n")
+
+
+def status_menu(user):
+    print("\n--- Estados del proceso ---")
+    print("1. Actualizar estado")
+    print("2. Ver historial de estados")
+    choice = prompt("Selecciona una opción")
+    if choice == "1":
+        update_process_status(user)
+    elif choice == "2":
+        view_status_history()
+    else:
+        print("Opción inválida.\n")
+
+
+def parse_date_input(label):
+    value = prompt(label)
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        print("Fecha inválida. Usa AAAA-MM-DD.\n")
+        return None
+
+
+def report_processes_by_date():
+    start_date = parse_date_input("Fecha inicio (AAAA-MM-DD)")
+    if not start_date:
+        return
+    end_date = parse_date_input("Fecha fin (AAAA-MM-DD)")
+    if not end_date:
+        return
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, data_json, created_at
+            FROM processes
+            WHERE date(created_at) BETWEEN date(?) AND date(?)
+            ORDER BY created_at ASC
+            """,
+            (start_date.date().isoformat(), end_date.date().isoformat()),
+        ).fetchall()
+    if not rows:
+        print("No hay procesos en ese rango.\n")
+        return
+    print("\n--- Procesos por rango ---")
+    list_processes(rows)
+
+
+def report_closed_by_month():
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT strftime('%Y-%m', changed_at) AS mes, COUNT(*)
+            FROM status_history
+            WHERE lower(new_status) IN ('cerrado', 'finalizado', 'archivado')
+            GROUP BY mes
+            ORDER BY mes
+            """
+        ).fetchall()
+    if not rows:
+        print("No hay cierres registrados en el historial.\n")
+        return
+    print("\n--- Procesos cerrados por mes ---")
+    for mes, total in rows:
+        print(f"{mes}: {total}")
+    print()
+
+
+def reports_menu():
+    print("\n--- Reportes ---")
+    print("1. Procesos por rango de fechas")
+    print("2. Procesos cerrados por mes (historial de estados)")
+    choice = prompt("Selecciona una opción")
+    if choice == "1":
+        report_processes_by_date()
+    elif choice == "2":
+        report_closed_by_month()
     else:
         print("Opción inválida.\n")
 
@@ -874,6 +1273,7 @@ def manage_users(user):
 
 def main():
     init_db()
+    backup_database(auto=True)
     ensure_admin_user()
     user = None
     while not user:
@@ -884,11 +1284,15 @@ def main():
         "2": ("Listar procesos", list_processes_menu),
         "3": ("Agregar entrada de bitácora", add_log_entry),
         "4": ("Ver bitácora de un proceso", view_log),
-        "5": ("Ajustes de campos", configure_fields),
-        "6": ("Gastos por proceso", lambda: expenses_menu(user)),
-        "7": ("Exportar bitácora", export_menu),
-        "8": ("Gestión de usuarios", lambda: manage_users(user)),
-        "9": ("Salir", None),
+        "5": ("Estados del proceso", lambda: status_menu(user)),
+        "6": ("Vencimientos y alertas", lambda: deadlines_menu(user)),
+        "7": ("Ajustes de campos", configure_fields),
+        "8": ("Gastos por proceso", lambda: expenses_menu(user)),
+        "9": ("Reportes", reports_menu),
+        "10": ("Exportar bitácora", export_menu),
+        "11": ("Respaldo manual", backup_database),
+        "12": ("Gestión de usuarios", lambda: manage_users(user)),
+        "13": ("Salir", None),
     }
 
     while True:
@@ -900,7 +1304,7 @@ def main():
         if not action:
             print("Opción inválida.\n")
             continue
-        if choice == "9":
+        if choice == "13":
             print("Hasta luego.")
             break
         action[1]()
