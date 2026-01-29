@@ -290,6 +290,79 @@ def backup_database(auto=False):
     print(f"{label}: {backup_path}\n")
 
 
+def list_backups():
+    if not BACKUPS_DIR.exists():
+        return []
+    return sorted(BACKUPS_DIR.glob("bitacora_*.db"), reverse=True)
+
+
+def restore_backup(user):
+    if not user.get("is_admin"):
+        print("Solo un administrador puede restaurar respaldos.\n")
+        return
+    backups = list_backups()
+    if not backups:
+        print("No hay respaldos disponibles.\n")
+        return
+    print("\n--- Restaurar respaldo ---")
+    for index, backup in enumerate(backups, start=1):
+        print(f"{index}. {backup.name}")
+    choice = prompt("Selecciona un respaldo (0 para volver)")
+    if choice == "0":
+        print()
+        return
+    if not choice.isdigit():
+        print("Número inválido.\n")
+        return
+    index = int(choice) - 1
+    if index < 0 or index >= len(backups):
+        print("Número fuera de rango.\n")
+        return
+    confirm = prompt("Escribe RESTAURAR para confirmar")
+    if confirm != "RESTAURAR":
+        print("Operación cancelada.\n")
+        return
+    shutil.copy2(backups[index], DB_PATH)
+    print("Respaldo restaurado. Reinicia la aplicación.\n")
+
+
+def reset_system(user):
+    if not user.get("is_admin"):
+        print("Solo un administrador puede resetear el sistema.\n")
+        return
+    confirm = prompt("Escribe RESET para borrar toda la información")
+    if confirm != "RESET":
+        print("Operación cancelada.\n")
+        return
+    if DB_PATH.exists():
+        backup_database()
+        DB_PATH.unlink()
+    if CONFIG_PATH.exists():
+        CONFIG_PATH.unlink()
+    print("Sistema reiniciado. Se creó un respaldo antes de borrar.\n")
+
+
+def backup_menu(user):
+    while True:
+        print("\n--- Respaldos y recuperación ---")
+        print("1. Crear respaldo manual")
+        print("2. Restaurar desde respaldo (admin)")
+        print("3. Resetear sistema (admin)")
+        print("0. Volver")
+        choice = prompt("Selecciona una opción")
+        if choice == "1":
+            backup_database()
+        elif choice == "2":
+            restore_backup(user)
+        elif choice == "3":
+            reset_system(user)
+        elif choice == "0":
+            print()
+            return
+        else:
+            print("Opción inválida.\n")
+
+
 def get_expense_totals():
     with get_connection() as conn:
         rows = conn.execute(
@@ -409,7 +482,7 @@ def configure_fields():
         print("2. Editar campo")
         print("3. Eliminar campo")
         print("4. Reordenar campo")
-        print("5. Volver")
+        print("0. Volver")
         choice = prompt("Selecciona una opción")
 
         if choice == "1":
@@ -522,7 +595,7 @@ def configure_fields():
             fields.insert(new_pos, field)
             save_config({"fields": fields})
             print("Campo reordenado.\n")
-        elif choice == "5":
+        elif choice == "0":
             print()
             return
         else:
@@ -715,71 +788,115 @@ def complete_deadline(user):
 
 
 def deadlines_menu(user):
-    print("\n--- Vencimientos y alertas ---")
-    print("1. Registrar vencimiento")
-    print("2. Ver vencimientos próximos (7 días)")
-    print("3. Ver todos los vencimientos pendientes")
-    print("4. Marcar vencimiento como completado")
-    choice = prompt("Selecciona una opción")
-    if choice == "1":
-        add_deadline(user)
-    elif choice == "2":
-        list_deadlines(include_completed=False, days_ahead=7)
-    elif choice == "3":
-        list_deadlines(include_completed=False)
-    elif choice == "4":
-        complete_deadline(user)
+    while True:
+        print("\n--- Vencimientos y alertas ---")
+        print("1. Registrar vencimiento")
+        print("2. Ver vencimientos próximos (7 días)")
+        print("3. Ver todos los vencimientos pendientes")
+        print("4. Marcar vencimiento como completado")
+        print("0. Volver")
+        choice = prompt("Selecciona una opción")
+        if choice == "1":
+            add_deadline(user)
+        elif choice == "2":
+            list_deadlines(include_completed=False, days_ahead=7)
+        elif choice == "3":
+            list_deadlines(include_completed=False)
+        elif choice == "4":
+            complete_deadline(user)
+        elif choice == "0":
+            print()
+            return
+        else:
+            print("Opción inválida.\n")
+
+
+def delete_process(user):
+    if not user.get("is_admin"):
+        print("Solo un administrador puede eliminar procesos.\n")
+        return
+    list_processes()
+    process_id = prompt("ID del proceso a eliminar")
+    if not process_id.isdigit():
+        print("ID inválido.\n")
+        return
+    confirm = prompt("Escribe ELIMINAR para confirmar")
+    if confirm != "ELIMINAR":
+        print("Operación cancelada.\n")
+        return
+    with get_connection() as conn:
+        conn.execute("DELETE FROM log_entries WHERE process_id = ?", (process_id,))
+        conn.execute("DELETE FROM expenses WHERE process_id = ?", (process_id,))
+        conn.execute("DELETE FROM status_history WHERE process_id = ?", (process_id,))
+        conn.execute("DELETE FROM deadlines WHERE process_id = ?", (process_id,))
+        deleted = conn.execute("DELETE FROM processes WHERE id = ?", (process_id,))
+    if deleted.rowcount == 0:
+        print("Proceso no encontrado.\n")
     else:
-        print("Opción inválida.\n")
+        print("Proceso eliminado.\n")
 
 
-def list_processes_menu():
+def list_processes_menu(user):
     config = load_config()
     fields = config.get("fields", DEFAULT_FIELDS)
     field_names = [field["name"] for field in fields]
-    print("\n--- Listado de procesos ---")
-    print("1. Vista general")
-    print("2. Filtrar por ubicación de juzgado")
-    print("3. Filtrar por tipo de proceso")
-    print("4. Filtrar por cualquier campo")
-    choice = prompt("Selecciona una opción")
-    if choice == "1":
-        list_processes()
-    elif choice == "2":
-        field = next(
-            (name for name in field_names if "juzgado" in name.lower()),
-            None,
-        )
-        if not field:
-            print("No existe un campo de juzgado en la configuración.\n")
+    while True:
+        print("\n--- Listado de procesos ---")
+        print("1. Vista general")
+        print("2. Filtrar por ubicación de juzgado")
+        print("3. Filtrar por tipo de proceso")
+        print("4. Filtrar por cualquier campo")
+        print("5. Eliminar proceso (admin)")
+        print("0. Volver")
+        choice = prompt("Selecciona una opción")
+        if choice == "1":
+            list_processes()
+            continue
+        elif choice == "2":
+            field = next(
+                (name for name in field_names if "juzgado" in name.lower()),
+                None,
+            )
+            if not field:
+                print("No existe un campo de juzgado. Selecciona un campo manualmente.\n")
+                choice = "4"
+            else:
+                value = prompt(f"Valor para {field}")
+                list_processes(filter_processes_by_field(field, value))
+                continue
+        if choice == "3":
+            field = next(
+                (name for name in field_names if "tipo" in name.lower()),
+                None,
+            )
+            if not field:
+                print("No existe un campo de tipo. Selecciona un campo manualmente.\n")
+                choice = "4"
+            else:
+                value = prompt(f"Valor para {field}")
+                list_processes(filter_processes_by_field(field, value))
+                continue
+        if choice == "4":
+            print("Campos disponibles:")
+            for index, field in enumerate(field_names, start=1):
+                print(f"{index}. {field}")
+            index_raw = prompt("Número del campo")
+            if not index_raw.isdigit():
+                print("Número inválido.\n")
+                continue
+            index = int(index_raw) - 1
+            if index < 0 or index >= len(field_names):
+                print("Número fuera de rango.\n")
+                continue
+            value = prompt("Valor a buscar")
+            list_processes(filter_processes_by_field(field_names[index], value))
+            continue
+        if choice == "5":
+            delete_process(user)
+            continue
+        if choice == "0":
+            print()
             return
-        value = prompt(f"Valor para {field}")
-        list_processes(filter_processes_by_field(field, value))
-    elif choice == "3":
-        field = next(
-            (name for name in field_names if "tipo" in name.lower()),
-            None,
-        )
-        if not field:
-            print("No existe un campo de tipo de proceso en la configuración.\n")
-            return
-        value = prompt(f"Valor para {field}")
-        list_processes(filter_processes_by_field(field, value))
-    elif choice == "4":
-        print("Campos disponibles:")
-        for index, field in enumerate(field_names, start=1):
-            print(f"{index}. {field}")
-        index_raw = prompt("Número del campo")
-        if not index_raw.isdigit():
-            print("Número inválido.\n")
-            return
-        index = int(index_raw) - 1
-        if index < 0 or index >= len(field_names):
-            print("Número fuera de rango.\n")
-            return
-        value = prompt("Valor a buscar")
-        list_processes(filter_processes_by_field(field_names[index], value))
-    else:
         print("Opción inválida.\n")
 
 
@@ -1088,48 +1205,63 @@ def export_to_pdf():
 
 
 def export_menu():
-    print("\n--- Exportar bitácora ---")
-    print("1. Exportar a CSV (Excel)")
-    print("2. Exportar a PDF")
-    print("3. Exportar gastos agrupados")
-    choice = prompt("Selecciona una opción")
-    if choice == "1":
-        export_to_csv()
-    elif choice == "2":
-        export_to_pdf()
-    elif choice == "3":
-        export_expenses_summary()
-    else:
-        print("Opción inválida.\n")
+    while True:
+        print("\n--- Exportar bitácora ---")
+        print("1. Exportar a CSV (Excel)")
+        print("2. Exportar a PDF")
+        print("3. Exportar gastos agrupados")
+        print("0. Volver")
+        choice = prompt("Selecciona una opción")
+        if choice == "1":
+            export_to_csv()
+        elif choice == "2":
+            export_to_pdf()
+        elif choice == "3":
+            export_expenses_summary()
+        elif choice == "0":
+            print()
+            return
+        else:
+            print("Opción inválida.\n")
 
 
 def expenses_menu(user):
-    print("\n--- Gastos por proceso ---")
-    print("1. Registrar gasto")
-    print("2. Ver gastos por proceso")
-    print("3. Editar gasto (admin)")
-    choice = prompt("Selecciona una opción")
-    if choice == "1":
-        add_expense(user)
-    elif choice == "2":
-        view_expenses()
-    elif choice == "3":
-        edit_expense(user)
-    else:
-        print("Opción inválida.\n")
+    while True:
+        print("\n--- Gastos por proceso ---")
+        print("1. Registrar gasto")
+        print("2. Ver gastos por proceso")
+        print("3. Editar gasto (admin)")
+        print("0. Volver")
+        choice = prompt("Selecciona una opción")
+        if choice == "1":
+            add_expense(user)
+        elif choice == "2":
+            view_expenses()
+        elif choice == "3":
+            edit_expense(user)
+        elif choice == "0":
+            print()
+            return
+        else:
+            print("Opción inválida.\n")
 
 
 def status_menu(user):
-    print("\n--- Estados del proceso ---")
-    print("1. Actualizar estado")
-    print("2. Ver historial de estados")
-    choice = prompt("Selecciona una opción")
-    if choice == "1":
-        update_process_status(user)
-    elif choice == "2":
-        view_status_history()
-    else:
-        print("Opción inválida.\n")
+    while True:
+        print("\n--- Estados del proceso ---")
+        print("1. Actualizar estado")
+        print("2. Ver historial de estados")
+        print("0. Volver")
+        choice = prompt("Selecciona una opción")
+        if choice == "1":
+            update_process_status(user)
+        elif choice == "2":
+            view_status_history()
+        elif choice == "0":
+            print()
+            return
+        else:
+            print("Opción inválida.\n")
 
 
 def parse_date_input(label):
@@ -1186,16 +1318,21 @@ def report_closed_by_month():
 
 
 def reports_menu():
-    print("\n--- Reportes ---")
-    print("1. Procesos por rango de fechas")
-    print("2. Procesos cerrados por mes (historial de estados)")
-    choice = prompt("Selecciona una opción")
-    if choice == "1":
-        report_processes_by_date()
-    elif choice == "2":
-        report_closed_by_month()
-    else:
-        print("Opción inválida.\n")
+    while True:
+        print("\n--- Reportes ---")
+        print("1. Procesos por rango de fechas")
+        print("2. Procesos cerrados por mes (historial de estados)")
+        print("0. Volver")
+        choice = prompt("Selecciona una opción")
+        if choice == "1":
+            report_processes_by_date()
+        elif choice == "2":
+            report_closed_by_month()
+        elif choice == "0":
+            print()
+            return
+        else:
+            print("Opción inválida.\n")
 
 
 def list_users():
@@ -1252,23 +1389,50 @@ def reset_password():
         print("Contraseña actualizada.\n")
 
 
+def set_user_admin():
+    username = prompt("Usuario a actualizar")
+    if not username:
+        print("El usuario es obligatorio.\n")
+        return
+    is_admin_raw = prompt("¿Debe ser administrador? (s/n)")
+    is_admin = 1 if is_admin_raw.lower().startswith("s") else 0
+    with get_connection() as conn:
+        updated = conn.execute(
+            "UPDATE users SET is_admin = ? WHERE username = ?",
+            (is_admin, username),
+        )
+    if updated.rowcount == 0:
+        print("Usuario no encontrado.\n")
+    else:
+        role = "administrador" if is_admin else "usuario"
+        print(f"Rol actualizado a {role}.\n")
+
+
 def manage_users(user):
     if not user.get("is_admin"):
         print("Solo un administrador puede gestionar usuarios.\n")
         return
-    print("\n--- Gestión de usuarios ---")
-    print("1. Listar usuarios")
-    print("2. Crear usuario")
-    print("3. Resetear contraseña")
-    choice = prompt("Selecciona una opción")
-    if choice == "1":
-        list_users()
-    elif choice == "2":
-        add_user()
-    elif choice == "3":
-        reset_password()
-    else:
-        print("Opción inválida.\n")
+    while True:
+        print("\n--- Gestión de usuarios ---")
+        print("1. Listar usuarios")
+        print("2. Crear usuario")
+        print("3. Resetear contraseña")
+        print("4. Asignar o quitar administrador")
+        print("0. Volver")
+        choice = prompt("Selecciona una opción")
+        if choice == "1":
+            list_users()
+        elif choice == "2":
+            add_user()
+        elif choice == "3":
+            reset_password()
+        elif choice == "4":
+            set_user_admin()
+        elif choice == "0":
+            print()
+            return
+        else:
+            print("Opción inválida.\n")
 
 
 def main():
@@ -1281,7 +1445,7 @@ def main():
 
     actions = {
         "1": ("Registrar nuevo proceso", add_process),
-        "2": ("Listar procesos", list_processes_menu),
+        "2": ("Listar procesos", lambda: list_processes_menu(user)),
         "3": ("Agregar entrada de bitácora", add_log_entry),
         "4": ("Ver bitácora de un proceso", view_log),
         "5": ("Estados del proceso", lambda: status_menu(user)),
@@ -1290,7 +1454,7 @@ def main():
         "8": ("Gastos por proceso", lambda: expenses_menu(user)),
         "9": ("Reportes", reports_menu),
         "10": ("Exportar bitácora", export_menu),
-        "11": ("Respaldo manual", backup_database),
+        "11": ("Respaldos y recuperación", lambda: backup_menu(user)),
         "12": ("Gestión de usuarios", lambda: manage_users(user)),
         "13": ("Salir", None),
     }

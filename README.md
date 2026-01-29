@@ -29,7 +29,7 @@ python app.py
    - Registrar y revisar gastos por proceso.
    - Reportes por fechas y cierres.
    - Exportar a CSV o PDF (incluye gastos agrupados).
-   - Respaldos manuales y automáticos.
+   - Respaldos, restauración y reseteo del sistema.
    - Gestión de usuarios y contraseñas.
 
 ## Ajustes de campos y validaciones
@@ -64,6 +64,7 @@ En el listado puedes ver:
 - Filtro por ubicación de juzgado (si existe un campo con “juzgado”).
 - Filtro por tipo de proceso (si existe un campo con “tipo”).
 - Filtro por cualquier campo configurable.
+- Eliminación de procesos (solo administrador).
 
 ## Estados con historial
 
@@ -103,6 +104,7 @@ La primera vez que se ejecuta la aplicación, te pedirá crear un usuario admini
 - Crear usuarios.
 - Listar usuarios.
 - Resetear contraseñas.
+- Asignar o quitar rol de administrador.
 
 Solo los administradores pueden gestionar usuarios.
 
@@ -122,3 +124,6 @@ El ejecutable quedará en la carpeta `dist/`.
 La información se guarda en una base de datos SQLite local llamada `bitacora.db` en el mismo directorio.
 
 Cada vez que inicias la aplicación se crea un respaldo automático en la carpeta `backups/`.
+
+Desde el menú **Respaldos y recuperación** puedes crear un respaldo manual, restaurar uno
+existente o resetear toda la información (solo administrador).
